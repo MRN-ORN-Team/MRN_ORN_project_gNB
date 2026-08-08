@@ -9,11 +9,54 @@
 int gnb_id = 0;
 bool is_initialized = false;
 typedef struct {
-    int rnti;
-    bool prop_1;
-    float prop_2;
+    int rnti; 
+
+    float channel_quality; //fixed characteristics
+    float dl_ber;
+    int current_mcs;  
+
+    bool force_mcs;
+    int target_mcs;
 } ue_struct;
 ue_struct connected_ue_list[CONNECTED_UES];
+
+float generate_ber(int mcs, float channel_quality)
+{
+    float mean_ber =
+        0.002f * (1.0f + mcs / 5.0f)
+        / channel_quality;
+
+    float variation =
+        ((float)rand() / RAND_MAX - 0.5f) * 0.004f;
+
+    float ber = mean_ber + variation;
+
+    if (ber < 0.0f)
+        ber = 0.0f;
+
+    return ber;
+}
+
+//update measurements
+void update_ue_measurements() {
+    for (int i = 0; i < CONNECTED_UES; i++) { 
+        if (!connected_ue_list[i].force_mcs) {
+            connected_ue_list[i].current_mcs =
+            rand() % 29; 
+        } 
+
+        connected_ue_list[i].dl_ber =
+            generate_ber(
+                connected_ue_list[i].current_mcs,
+                connected_ue_list[i].channel_quality
+            );
+        //connected_ue_list[i].dl_ber =
+        //    (float)rand() / RAND_MAX * 0.1;
+
+    }
+} 
+
+
 
 /*
  * initialize the ues
@@ -22,9 +65,26 @@ void initialize_ues_if_needed(){
     if(is_initialized)
         return;
     for (int ue=0;ue<CONNECTED_UES;ue++){
+        //connected_ue_list[ue].rnti = rand();
+        //connected_ue_list[ue].prop_1 = false;
+        //connected_ue_list[ue].prop_2 = -1; 
         connected_ue_list[ue].rnti = rand();
-        connected_ue_list[ue].prop_1 = false;
-        connected_ue_list[ue].prop_2 = -1;
+
+        connected_ue_list[ue].channel_quality =
+    0.8 + ((float)rand() / RAND_MAX) * 0.4;  
+
+        connected_ue_list[ue].current_mcs = 0;
+
+        connected_ue_list[ue].dl_ber =
+          generate_ber(
+            connected_ue_list[ue].current_mcs,
+            connected_ue_list[ue].channel_quality
+        );
+
+        //connected_ue_list[ue].dl_ber = 0;
+        
+        connected_ue_list[ue].force_mcs = false;
+        connected_ue_list[ue].target_mcs = -1;
     }
     is_initialized = true;
 }
@@ -135,10 +195,16 @@ void handle_control(RANMessage* in_mess){
     initialize_ues_if_needed();
     // loop tarhet params and apply
     for(int i=0; i<in_mess->ran_control_request->n_target_param_map; i++){
+        /*
         printf("Applying target parameter %s with value %s\n",\
         get_enum_name(in_mess->ran_control_request->target_param_map[i]->key),\
-        in_mess->ran_control_request->target_param_map[i]->string_value);
-        ran_write(in_mess->ran_control_request->target_param_map[i]);
+        in_mess->ran_control_request->target_param_map[i]->string_value); 
+        */
+        ran_write(in_mess->ran_control_request->target_param_map[i]); 
+        printf("Applying target parameter %s\n",
+         get_enum_name(
+           in_mess->ran_control_request->target_param_map[i]->key
+         ));
     }
     // free incoming ran message
     ran_message__free_unpacked(in_mess,NULL);
@@ -174,23 +240,34 @@ void apply_properties_to_ue_list(UeListM* ue_list){
     // loop the ues and apply what needed to each, according to what is inside the list received from the xapp
     for(int ue=0; ue<ue_list->n_ue_info; ue++){
         // apply generic properties (example)
-        set_ue_properties(ue_list->ue_info[ue]->rnti,
-                          ue_list->ue_info[ue]->prop_1,
-                          ue_list->ue_info[ue]->prop_2);
+        //set_ue_properties(ue_list->ue_info[ue]->rnti,
+        //                  ue_list->ue_info[ue]->prop_1,
+        //                  ue_list->ue_info[ue]->prop_2);
 
+        set_ue_properties(ue_list->ue_info[ue]->rnti,
+                          ue_list->ue_info[ue]->force_mcs,
+                          ue_list->ue_info[ue]->target_mcs);
         // more stuff later when needed     
     }
 }
 
-void set_ue_properties(int rnti, bool prop_1, float prop_2){
+//void set_ue_properties(int rnti, bool prop_1, float prop_2){
+void set_ue_properties(int rnti, bool force_mcs, int target_mcs){
 
     // iterate ue list until rnti is found
     bool rnti_not_found = true;
     for(int ue=0; ue<CONNECTED_UES; ue++) {
         if(connected_ue_list[ue].rnti == rnti){
             printf("RNTI found\n");
-            connected_ue_list[ue].prop_1 = prop_1;
-            connected_ue_list[ue].prop_2 = prop_2;
+            connected_ue_list[ue].force_mcs = force_mcs;
+            connected_ue_list[ue].target_mcs = target_mcs;  
+
+            if (force_mcs) {
+              connected_ue_list[ue].current_mcs = target_mcs;
+            }  
+
+            printf("RNTI %d: force_mcs=%d, target_mcs=%d\n",
+                   rnti, force_mcs, target_mcs);
             rnti_not_found = false;
             break;
         } else {
@@ -247,7 +324,10 @@ void handle_master_message(void* buf, int buflen, int out_socket, struct sockadd
 }
 
 
-UeListM* build_ue_list_message(){
+UeListM* build_ue_list_message(){ 
+    update_ue_measurements(); // update the measurements before building the message  
+
+    
     // init ue list protobuf message
     UeListM* ue_list_m = malloc(sizeof(UeListM));
     ue_list_m__init(ue_list_m);
@@ -274,21 +354,28 @@ UeListM* build_ue_list_message(){
         // read mesures and add to message (actually just send random data)
 
         // measures
-        ue_info_list[i]->has_meas_type_1 = 1;
-        ue_info_list[i]->meas_type_1 = rand();
-        ue_info_list[i]->has_meas_type_2 = 1;
-        ue_info_list[i]->meas_type_2 = rand();
-        ue_info_list[i]->has_meas_type_3 = 1;
-        ue_info_list[i]->meas_type_3 = rand();
+        //ue_info_list[i]->has_meas_type_1 = 1;
+        //ue_info_list[i]->meas_type_1 = rand();
+        //ue_info_list[i]->has_meas_type_2 = 1;
+        //ue_info_list[i]->meas_type_2 = rand();
+        //ue_info_list[i]->has_meas_type_3 = 1;
+        //ue_info_list[i]->meas_type_3 = rand();
 
         // properties
-        ue_info_list[i]->has_prop_1 = 1;
-        ue_info_list[i]->prop_1 = connected_ue_list[i].prop_1;
-        if(connected_ue_list[i].prop_2 > -1){
-            ue_info_list[i]->has_prop_2 = 1;
-            ue_info_list[i]->prop_2 = connected_ue_list[i].prop_2;
-        }
+        //ue_info_list[i]->has_prop_1 = 1;
+        //ue_info_list[i]->prop_1 = connected_ue_list[i].prop_1;
+        //if(connected_ue_list[i].prop_2 > -1){
+        //    ue_info_list[i]->has_prop_2 = 1;
+        //    ue_info_list[i]->prop_2 = connected_ue_list[i].prop_2;
+        //}
 
+        ue_info_list[i]->has_dl_ber = 1;
+        ue_info_list[i]->dl_ber =
+          connected_ue_list[i].dl_ber;
+
+        ue_info_list[i]->has_current_mcs = 1;
+        ue_info_list[i]->current_mcs =
+            connected_ue_list[i].current_mcs;
 
     }
     // add a null terminator to the list
