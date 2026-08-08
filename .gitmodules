@@ -1,4 +1,4 @@
 [submodule "oai-oran-protolib"]
-    path = oai-oran-protolib 
-    url = https://github.com/LordKirigiri/MRN_ORN_project_oai_protolib.git 
+    path = oai-oran-protolib  
+    url = https://github.com/MRN-ORN-Team/MRN_ORN_project_oai_protolib.git
 	branch = project2
